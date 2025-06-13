@@ -1,0 +1,708 @@
+// Advanced physics engine for Starship Simulator
+import * as THREE from 'three';
+
+/**
+ * Enhanced physics engine with realistic dynamics for Starship simulation
+ */
+export class ImprovedPhysicsEngine {
+    constructor() {
+        // Gravity constant (Earth gravity is 9.81 m/s²)
+        this.gravity = 9.81;
+        
+        // Flag to indicate if stages are combined or separated
+        this.combinedStage = true; // Default to combined stages on launch
+        
+        // Atmospheric density factors
+        this.atmosphericDensity = 1.225; // Earth atmosphere density at sea level
+        
+        // Vehicle properties
+        this.vehicles = {
+            starship: {
+                mass: 120000, // kg (dry mass)
+                fuel: 1200000, // kg
+                maxThrust: 7500000, // N (6 Raptor engines)
+                dragCoefficient: 0.82,
+                crossSectionalArea: Math.PI * 4.5 * 4.5, // m²
+                position: new THREE.Vector3(0, 0, 0),
+                velocity: new THREE.Vector3(0, 0, 0),
+                acceleration: new THREE.Vector3(0, 0, 0),
+                rotation: new THREE.Euler(0, 0, 0),
+                angularVelocity: new THREE.Vector3(0, 0, 0),
+                throttle: 0,
+                gridFinDeflection: 0,
+                engineGimbal: new THREE.Vector2(0, 0)
+            },
+            superHeavy: {
+                mass: 200000, // kg (dry mass)
+                fuel: 3400000, // kg
+                maxThrust: 75000000, // N (33 Raptor engines) - Realistic thrust for liftoff
+                dragCoefficient: 0.85,
+                crossSectionalArea: Math.PI * 4.5 * 4.5, // m²
+                position: new THREE.Vector3(0, 0, 0),
+                velocity: new THREE.Vector3(0, 0, 0),
+                acceleration: new THREE.Vector3(0, 0, 0),
+                rotation: new THREE.Euler(0, 0, 0),
+                angularVelocity: new THREE.Vector3(0, 0, 0),
+                throttle: 0,
+                gridFinDeflection: 0,
+                engineGimbal: new THREE.Vector2(0, 0)
+            }
+        };
+        
+        // PID controllers for landing
+        this.pid = {
+            altitude: {
+                kP: 0.05,
+                kI: 0.001,
+                kD: 0.2,
+                integral: 0,
+                lastError: 0
+            },
+            horizontal: {
+                kP: 0.08,
+                kI: 0.001,
+                kD: 0.3,
+                integral: 0,
+                lastError: 0
+            },
+            attitude: {
+                kP: 1.0,
+                kI: 0.01,
+                kD: 0.5,
+                integral: 0,
+                lastError: 0
+            }
+        };
+        
+        // Landing parameters
+        this.landingTarget = new THREE.Vector3(0, 0, 0);
+        this.landingPhase = 'none'; // none, approach, final, touchdown
+        this.landingStartAltitude = 2000; // meters
+        this.hoverAltitude = 50; // meters
+        this.touchdownSpeed = 2.0; // m/s
+        
+        // Wind model
+        this.windSpeed = 0;
+        this.windDirection = 0;
+        this.gustStrength = 0;
+        this.turbulenceIntensity = 0;
+    }
+    
+    /**
+     * Set the landing target position
+     * @param {THREE.Vector3} target - Target landing position
+     */
+    setLandingTarget(target) {
+        this.landingTarget.copy(target);
+    }
+    
+    /**
+     * Start the landing sequence for a vehicle
+     * @param {string} vehicleId - ID of the vehicle (starship or superHeavy)
+     */
+    startLandingSequence(vehicleId) {
+        const vehicle = this.vehicles[vehicleId];
+        if (!vehicle) return;
+        
+        this.landingPhase = 'approach';
+        
+        // Reset PID controllers
+        Object.values(this.pid).forEach(controller => {
+            controller.integral = 0;
+            controller.lastError = 0;
+        });
+        
+        // Set initial approach parameters
+        vehicle.throttle = 0.3;
+        
+        // Calculate initial rotation to point toward landing target
+        const direction = new THREE.Vector3().subVectors(this.landingTarget, vehicle.position).normalize();
+        const angle = Math.atan2(direction.x, direction.y);
+        vehicle.rotation.z = angle;
+        
+        return {
+            phase: this.landingPhase,
+            altitude: vehicle.position.y,
+            distance: vehicle.position.distanceTo(this.landingTarget)
+        };
+    }
+    
+    /**
+     * Update the physics simulation
+     * @param {number} deltaTime - Time step in seconds
+     * @param {Object} scene - The THREE.js scene for visual updates
+     */
+    update(deltaTime, scene) {
+        // Cap delta time to prevent instability
+        const dt = Math.min(deltaTime, 0.1);
+        
+        // Update wind model
+        this.updateWind(dt);
+        
+        // Update each vehicle
+        for (const [id, vehicle] of Object.entries(this.vehicles)) {
+            // Skip if vehicle is not active
+            if (!vehicle.active) continue;
+            
+            // Calculate forces
+            const forces = this.calculateForces(vehicle, dt);
+            
+            // Apply landing control if in landing phase
+            if (this.landingPhase !== 'none' && id === 'superHeavy') {
+                this.updateLandingControl(vehicle, dt);
+            }
+            
+            // Update acceleration (F = ma)
+            const totalMass = vehicle.mass + vehicle.fuel;
+            vehicle.acceleration.x = forces.x / totalMass;
+            vehicle.acceleration.y = forces.y / totalMass;
+            vehicle.acceleration.z = forces.z / totalMass;
+            
+            // Update velocity (v = v0 + a*t)
+            vehicle.velocity.x += vehicle.acceleration.x * dt;
+            vehicle.velocity.y += vehicle.acceleration.y * dt;
+            vehicle.velocity.z += vehicle.acceleration.z * dt;
+            
+            // Update position (p = p0 + v*t)
+            vehicle.position.x += vehicle.velocity.x * dt;
+            vehicle.position.y += vehicle.velocity.y * dt;
+            vehicle.position.z += vehicle.velocity.z * dt;
+            
+            // Update rotation based on angular velocity
+            vehicle.rotation.x += vehicle.angularVelocity.x * dt;
+            vehicle.rotation.y += vehicle.angularVelocity.y * dt;
+            vehicle.rotation.z += vehicle.angularVelocity.z * dt;
+            
+            // Update fuel consumption
+            if (vehicle.throttle > 0) {
+                // Fuel consumption rate is proportional to throttle
+                const fuelRate = vehicle.maxThrust * vehicle.throttle / 3000; // kg/s
+                vehicle.fuel = Math.max(0, vehicle.fuel - fuelRate * dt);
+            }
+            
+            // Create quaternion from Euler angles
+            vehicle.quaternion = new THREE.Quaternion().setFromEuler(
+                new THREE.Euler(vehicle.rotation.x, vehicle.rotation.y, vehicle.rotation.z, 'XYZ')
+            );
+            
+            // Calculate Euler angles for telemetry
+            vehicle.eulerAngles = {
+                x: vehicle.rotation.x,
+                y: vehicle.rotation.y,
+                z: vehicle.rotation.z
+            };
+            
+            // Ground collision detection
+            if (vehicle.position.y < 0) {
+                vehicle.position.y = 0;
+                vehicle.velocity.set(0, 0, 0);
+                vehicle.acceleration.set(0, 0, 0);
+                vehicle.angularVelocity.set(0, 0, 0);
+                
+                // Set landing phase to touchdown if we were landing
+                if (this.landingPhase === 'final') {
+                    this.landingPhase = 'touchdown';
+                }
+            }
+        }
+        
+        return {
+            superHeavy: {
+                position: this.vehicles.superHeavy.position.clone(),
+                rotation: this.vehicles.superHeavy.rotation.clone(),
+                velocity: this.vehicles.superHeavy.velocity.length(),
+                acceleration: this.vehicles.superHeavy.acceleration.length(),
+                throttle: this.vehicles.superHeavy.throttle,
+                fuel: this.vehicles.superHeavy.fuel
+            },
+            starship: {
+                position: this.vehicles.starship.position.clone(),
+                rotation: this.vehicles.starship.rotation.clone(),
+                velocity: this.vehicles.starship.velocity.length(),
+                acceleration: this.vehicles.starship.acceleration.length(),
+                throttle: this.vehicles.starship.throttle,
+                fuel: this.vehicles.starship.fuel
+            },
+            landingPhase: this.landingPhase
+        };
+    }
+    
+    /**
+     * Calculate all forces acting on a vehicle
+     * @param {Object} vehicle - Vehicle object
+     * @param {number} dt - Time step
+     * @returns {THREE.Vector3} Net force vector
+     */
+    calculateForces(vehicle, dt) {
+        const forces = new THREE.Vector3(0, 0, 0);
+        
+        // Gravity force (F = mg)
+        const gravityForce = this.gravity * (vehicle.mass + vehicle.fuel);
+        forces.y -= gravityForce;
+        
+        // Thrust force
+        if (vehicle.throttle > 0) {
+            // Calculate thrust direction based on vehicle orientation and gimbal
+            // By default, thrust should point upward (positive y) when the rocket is upright
+            const thrustDirection = new THREE.Vector3(
+                Math.sin(vehicle.rotation.z) + vehicle.engineGimbal.x,
+                Math.cos(vehicle.rotation.z) + vehicle.engineGimbal.y,
+                0
+            ).normalize();
+            
+            // Apply thrust force (F = T * direction)
+            const thrustMagnitude = vehicle.maxThrust * vehicle.throttle;
+            const thrustForce = thrustDirection.multiplyScalar(thrustMagnitude);
+            
+            // Debug: Show force comparison for launch
+            console.log('Force comparison:', {
+                gravity: gravityForce,
+                thrust: thrustMagnitude,
+                thrustY: thrustForce.y,
+                netVertical: thrustForce.y - gravityForce
+            });
+            
+            // Log thrust calculations for debugging
+            console.log('Thrust calculation:', {
+                throttle: vehicle.throttle,
+                magnitude: thrustMagnitude,
+                direction: [thrustDirection.x, thrustDirection.y, thrustDirection.z],
+                force: [thrustForce.x, thrustForce.y, thrustForce.z]
+            });
+            
+            forces.add(thrustForce);
+        }
+        
+        // Aerodynamic drag
+        // Calculate atmospheric density at current altitude
+        const altitude = vehicle.position.y;
+        const densityFactor = Math.exp(-altitude / 11000) * this.atmosphericDensity;
+        
+        // Calculate drag force magnitude (F = 0.5 * rho * v^2 * Cd * A)
+        const velocitySquared = vehicle.velocity.lengthSq();
+        if (velocitySquared > 0) {
+            const dragMagnitude = 0.5 * densityFactor * velocitySquared * 
+                                 vehicle.dragCoefficient * vehicle.crossSectionalArea;
+            
+            // Drag direction is opposite to velocity
+            const dragDirection = vehicle.velocity.clone().normalize().negate();
+            forces.add(dragDirection.multiplyScalar(dragMagnitude));
+        }
+        
+        // Grid fin forces (only if deployed and in atmosphere)
+        if (vehicle.gridFinDeflection !== 0 && densityFactor > 0.001) {
+            // Calculate lift and control forces from grid fins
+            const finForce = new THREE.Vector3(
+                vehicle.gridFinDeflection * velocitySquared * 0.01 * densityFactor,
+                0,
+                0
+            );
+            
+            // Apply fin force
+            forces.add(finForce);
+            
+            // Add torque effect (simplified)
+            vehicle.angularVelocity.z += vehicle.gridFinDeflection * velocitySquared * 0.0001 * densityFactor * dt;
+        }
+        
+        // Wind forces
+        if (this.windSpeed > 0 && densityFactor > 0.001) {
+            const windDirection = new THREE.Vector3(
+                Math.cos(this.windDirection),
+                0,
+                Math.sin(this.windDirection)
+            );
+            
+            // Add gust component
+            const gustVector = windDirection.clone().multiplyScalar(this.gustStrength);
+            
+            // Calculate wind force (simplified)
+            const windForce = windDirection.multiplyScalar(
+                this.windSpeed * densityFactor * vehicle.crossSectionalArea * 0.5
+            );
+            windForce.add(gustVector);
+            
+            forces.add(windForce);
+        }
+        
+        return forces;
+    }
+    
+    /**
+     * Update the landing control system
+     * @param {Object} vehicle - Vehicle object
+     * @param {number} dt - Time step
+     */
+    updateLandingControl(vehicle, dt) {
+        // Calculate distance to target
+        const horizontalDistance = new THREE.Vector2(
+            vehicle.position.x - this.landingTarget.x,
+            vehicle.position.z - this.landingTarget.z
+        ).length();
+        
+        // Update landing phase based on altitude
+        if (this.landingPhase === 'approach' && vehicle.position.y < this.landingStartAltitude / 2) {
+            this.landingPhase = 'final';
+        }
+        
+        // PID control for altitude
+        let targetAltitudeRate;
+        let targetThrottle;
+        
+        if (this.landingPhase === 'approach') {
+            // During approach, maintain a controlled descent rate based on altitude
+            const descentRate = Math.max(-50, -vehicle.position.y / 20);
+            targetAltitudeRate = descentRate;
+            
+            // Aim toward landing target
+            const directionToTarget = new THREE.Vector3(
+                this.landingTarget.x - vehicle.position.x,
+                0,
+                this.landingTarget.z - vehicle.position.z
+            ).normalize();
+            
+            // Calculate desired rotation to point toward target
+            const targetAngle = Math.atan2(directionToTarget.x, directionToTarget.z);
+            const currentAngle = vehicle.rotation.y;
+            const angleError = this.normalizeAngle(targetAngle - currentAngle);
+            
+            // Apply rotation correction using PID
+            vehicle.angularVelocity.y = this.pidControl(
+                this.pid.attitude, 
+                angleError, 
+                dt
+            );
+            
+            // Use grid fins for additional control
+            vehicle.gridFinDeflection = this.pidControl(
+                this.pid.horizontal,
+                horizontalDistance,
+                dt
+            ) * 0.1;
+        } 
+        else if (this.landingPhase === 'final') {
+            // Final approach - slow descent and precise positioning
+            
+            // Target hover at specified altitude, then descend slowly
+            const hoverError = vehicle.position.y - this.hoverAltitude;
+            if (hoverError > 0) {
+                // Still descending to hover altitude
+                targetAltitudeRate = -Math.min(20, hoverError / 2);
+            } else {
+                // At or below hover altitude, descend very slowly
+                targetAltitudeRate = -this.touchdownSpeed;
+            }
+            
+            // Horizontal position control - aim directly at target
+            const horizontalError = new THREE.Vector2(
+                this.landingTarget.x - vehicle.position.x,
+                this.landingTarget.z - vehicle.position.z
+            );
+            
+            // Apply horizontal correction using engine gimbal
+            vehicle.engineGimbal.x = this.pidControl(
+                this.pid.horizontal,
+                horizontalError.x,
+                dt
+            ) * 0.05;
+            
+            vehicle.engineGimbal.y = this.pidControl(
+                this.pid.horizontal,
+                horizontalError.y,
+                dt
+            ) * 0.05;
+            
+            // Keep vehicle vertical during final descent
+            const attitudeError = -vehicle.rotation.z;
+            vehicle.angularVelocity.z = this.pidControl(
+                this.pid.attitude,
+                attitudeError,
+                dt
+            );
+        }
+        
+        // Altitude rate control
+        const currentAltitudeRate = vehicle.velocity.y;
+        const altitudeRateError = targetAltitudeRate - currentAltitudeRate;
+        
+        // Calculate throttle using PID controller
+        const throttleAdjustment = this.pidControl(
+            this.pid.altitude,
+            altitudeRateError,
+            dt
+        );
+        
+        // Apply throttle with limits
+        targetThrottle = 0.5 + throttleAdjustment;
+        vehicle.throttle = Math.max(0.1, Math.min(1.0, targetThrottle));
+        
+        return {
+            phase: this.landingPhase,
+            throttle: vehicle.throttle,
+            altitude: vehicle.position.y,
+            distance: horizontalDistance
+        };
+    }
+    
+    /**
+     * Update the wind model
+     * @param {number} dt - Time step
+     */
+    updateWind(dt) {
+        // Gradually change wind speed and direction
+        this.windSpeed += (Math.random() - 0.5) * dt * 0.5;
+        this.windSpeed = Math.max(0, Math.min(10, this.windSpeed));
+        
+        this.windDirection += (Math.random() - 0.5) * dt * 0.2;
+        
+        // Update gust component
+        this.gustStrength *= 0.95; // Decay existing gust
+        if (Math.random() < 0.01) {
+            // Random chance of a new gust
+            this.gustStrength = Math.random() * this.windSpeed;
+        }
+        
+        // Update turbulence
+        this.turbulenceIntensity = Math.random() * this.windSpeed * 0.1;
+    }
+    
+    /**
+     * PID controller implementation
+     * @param {Object} controller - PID controller parameters
+     * @param {number} error - Current error
+     * @param {number} dt - Time step
+     * @returns {number} Control output
+     */
+    pidControl(controller, error, dt) {
+        // Proportional term
+        const p = controller.kP * error;
+        
+        // Integral term
+        controller.integral += error * dt;
+        const i = controller.kI * controller.integral;
+        
+        // Derivative term
+        const errorRate = (error - controller.lastError) / dt;
+        const d = controller.kD * errorRate;
+        
+        // Update last error
+        controller.lastError = error;
+        
+        // Return combined control output
+        return p + i + d;
+    }
+    
+    /**
+     * Normalize an angle to the range [-PI, PI]
+     * @param {number} angle - Angle in radians
+     * @returns {number} Normalized angle
+     */
+    normalizeAngle(angle) {
+        while (angle > Math.PI) angle -= 2 * Math.PI;
+        while (angle < -Math.PI) angle += 2 * Math.PI;
+        return angle;
+    }
+    
+    /**
+     * Update physics for launch phase
+     * @param {number} deltaTime - Time step in seconds
+     * @returns {Object} Current physics state
+     */
+    updateLaunch(deltaTime) {
+        console.log('Updating launch physics with deltaTime:', deltaTime);
+        
+        // Set Super Heavy to active and ensure correct initialization
+        this.vehicles.superHeavy.active = true;
+        this.vehicles.superHeavy.throttle = 1.0; // Full throttle for launch
+        
+        // Ensure rotation is properly set for vertical launch
+        this.vehicles.superHeavy.rotation.set(0, 0, 0);
+        
+        // Create quaternion from updated Euler angles
+        this.vehicles.superHeavy.quaternion = new THREE.Quaternion().setFromEuler(
+            new THREE.Euler(0, 0, 0, 'XYZ')
+        );
+        
+        // Log vehicle state before update
+        console.log('Before update - Position:', this.vehicles.superHeavy.position.y, 
+                   'Velocity:', this.vehicles.superHeavy.velocity.y,
+                   'Rotation:', this.vehicles.superHeavy.rotation);
+        console.log('Thrust:', this.vehicles.superHeavy.throttle * this.vehicles.superHeavy.maxThrust, 'N');
+        
+        // Calculate total mass
+        const totalMass = this.vehicles.superHeavy.mass + this.vehicles.superHeavy.fuel;
+        console.log('Total mass:', totalMass, 'kg');
+        
+        // Calculate gravity force
+        const gravityForce = totalMass * this.gravity;
+        console.log('Gravity force:', gravityForce, 'N');
+        
+        // Calculate net force (thrust - gravity)
+        const netForce = (this.vehicles.superHeavy.throttle * this.vehicles.superHeavy.maxThrust) - gravityForce;
+        console.log('Net force:', netForce, 'N');
+        
+        // Run general update
+        this.update(deltaTime);
+        
+        // Log vehicle state after update
+        console.log('After update - Position:', this.vehicles.superHeavy.position.y, 
+                   'Velocity:', this.vehicles.superHeavy.velocity.y,
+                   'Acceleration:', this.vehicles.superHeavy.acceleration.y);
+        
+        // Return current state for the main simulation
+        return {
+            position: this.vehicles.superHeavy.position.clone(),
+            velocity: this.vehicles.superHeavy.velocity.clone(),
+            acceleration: this.vehicles.superHeavy.acceleration.clone(),
+            quaternion: this.vehicles.superHeavy.quaternion,
+            eulerAngles: this.vehicles.superHeavy.eulerAngles,
+            thrust: this.vehicles.superHeavy.throttle * this.vehicles.superHeavy.maxThrust,
+            fuel: this.vehicles.superHeavy.fuel
+        };
+    }
+    
+    /**
+     * Update physics for ascent phase
+     * @param {number} deltaTime - Time step in seconds
+     * @returns {Object} Current physics state
+     */
+    updateAscent(deltaTime) {
+        // Continue with ascent physics
+        this.vehicles.superHeavy.throttle = 0.9; // Slightly reduced throttle after initial launch
+        
+        // Run general update
+        this.update(deltaTime);
+        
+        // Apply slight pitch maneuver for gravity turn
+        if (this.vehicles.superHeavy.position.y > 500) {
+            // Gradually pitch over based on altitude
+            const pitchAngle = Math.min(0.2, (this.vehicles.superHeavy.position.y - 500) / 10000);
+            this.vehicles.superHeavy.rotation.z = pitchAngle;
+        }
+        
+        // Return current state for the main simulation
+        return {
+            position: this.vehicles.superHeavy.position.clone(),
+            velocity: this.vehicles.superHeavy.velocity.clone(),
+            acceleration: this.vehicles.superHeavy.acceleration.clone(),
+            quaternion: this.vehicles.superHeavy.quaternion,
+            eulerAngles: this.vehicles.superHeavy.eulerAngles,
+            thrust: this.vehicles.superHeavy.throttle * this.vehicles.superHeavy.maxThrust,
+            fuel: this.vehicles.superHeavy.fuel
+        };
+    }
+
+    /**
+     * Update physics for stage separation phase
+     * @param {number} deltaTime - Time step in seconds
+     * @returns {Object} Current physics state for both vehicles
+     */
+    updateStageSeparation(deltaTime) {
+        // Simple separation: apply a small opposing velocity to each vehicle for a short duration
+        // This is a very basic implementation. A real one would involve force impulses.
+        if (!this.separationTimer) {
+            this.separationTimer = 0.5; // Separate for 0.5 seconds
+            this.vehicles.superHeavy.velocity.y -= 1; // Small nudge down for booster
+            this.vehicles.starship.velocity.y += 1;   // Small nudge up for starship
+        }
+
+        this.separationTimer -= deltaTime;
+        const separationComplete = this.separationTimer <= 0;
+
+        // Continue applying basic physics to both
+        this.updateVehiclePhysics(this.vehicles.superHeavy, deltaTime, false); // No throttle for booster
+        this.updateVehiclePhysics(this.vehicles.starship, deltaTime, true); // Starship might ignite its engines
+
+        return {
+            boosterPosition: this.vehicles.superHeavy.position.clone(),
+            boosterQuaternion: new THREE.Quaternion().setFromEuler(this.vehicles.superHeavy.rotation),
+            boosterVelocity: this.vehicles.superHeavy.velocity.clone(),
+            starshipPosition: this.vehicles.starship.position.clone(),
+            starshipQuaternion: new THREE.Quaternion().setFromEuler(this.vehicles.starship.rotation),
+            starshipVelocity: this.vehicles.starship.velocity.clone(),
+            separationComplete: separationComplete
+        };
+    }
+
+    /**
+     * Update physics for booster return phase
+     * @param {number} deltaTime - Time step in seconds
+     * @returns {Object} Current physics state for the booster
+     */
+    updateBoosterReturn(deltaTime) {
+        const vehicle = this.vehicles.superHeavy;
+        // For now, just apply gravity and drag, landing logic will be separate
+        // Throttle is assumed to be controlled by landing logic if active
+        this.updateVehiclePhysics(vehicle, deltaTime, vehicle.throttle > 0);
+
+        // Integrate with landing PID controller if landing is active
+        if (this.landingPhase !== 'none' && this.landingPhase !== 'touchdown') {
+             this.updateLandingControl(vehicle, deltaTime); // This method already exists and applies PID
+        }
+
+        return {
+            position: vehicle.position.clone(),
+            quaternion: new THREE.Quaternion().setFromEuler(vehicle.rotation),
+            velocity: vehicle.velocity.clone(),
+            acceleration: vehicle.acceleration.clone(),
+            fuel: vehicle.fuel,
+            landingComplete: this.landingPhase === 'touchdown',
+            readyForCatch: this.landingPhase === 'final' && vehicle.position.y < 100 // Example for Mechazilla
+        };
+    }
+
+    /**
+     * Update physics for Starship ascent phase
+     * @param {number} deltaTime - Time step in seconds
+     * @returns {Object} Current physics state for Starship
+     */
+    updateStarshipAscent(deltaTime) {
+        const vehicle = this.vehicles.starship;
+        // Starship uses its own engines, throttle should be managed from main.js
+        this.updateVehiclePhysics(vehicle, deltaTime, vehicle.throttle > 0);
+
+        return {
+            position: vehicle.position.clone(),
+            quaternion: new THREE.Quaternion().setFromEuler(vehicle.rotation),
+            velocity: vehicle.velocity.clone(),
+            acceleration: vehicle.acceleration.clone(),
+            thrust: vehicle.throttle * vehicle.maxThrust,
+            fuel: vehicle.fuel,
+            orbitReached: vehicle.position.y > 200000 // Example: 200km for orbit
+        };
+    }
+
+    /**
+     * Helper to apply common physics updates to a vehicle
+     * @param {Object} vehicle - The vehicle object
+     * @param {number} deltaTime - Time step
+     * @param {boolean} enginesOn - Whether to calculate thrust and fuel consumption
+     */
+    updateVehiclePhysics(vehicle, deltaTime, enginesOn) {
+        const dt = Math.min(deltaTime, 0.1); // Cap delta time
+
+        // Calculate forces
+        const forces = this.calculateForces(vehicle, dt); // calculateForces already handles throttle for thrust
+
+        // Update acceleration (F = ma)
+        const totalMass = vehicle.mass + vehicle.fuel;
+        if (totalMass <= 0) return; // Avoid division by zero if fuel is exhausted and mass is zero
+
+        vehicle.acceleration.x = forces.x / totalMass;
+        vehicle.acceleration.y = forces.y / totalMass;
+        vehicle.acceleration.z = forces.z / totalMass;
+        
+        // Update velocity (v = v0 + a*t)
+        vehicle.velocity.x += vehicle.acceleration.x * dt;
+        vehicle.velocity.y += vehicle.acceleration.y * dt;
+        vehicle.velocity.z += vehicle.acceleration.z * dt;
+        
+        // Update position (p = p0 + v*t)
+        vehicle.position.x += vehicle.velocity.x * dt;
+        vehicle.position.y += vehicle.velocity.y * dt;
+        vehicle.position.z += vehicle.velocity.z * dt;
+        
+        // Update rotation based on angular velocity
+        vehicle.rotation.x += vehicle.angularVelocity.x * dt;
+        vehicle.rotation.y += vehicle.angularVelocity.y * dt;
+}

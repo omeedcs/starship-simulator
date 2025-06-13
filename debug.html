@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug Starship Simulator</title>
+</head>
+<body>
+    <h1>Starship Simulator Debug</h1>
+    <div id="errors" style="color: red;"></div>
+    <div id="log"></div>
+
+    <script>
+        // Capture errors
+        window.onerror = function(message, source, lineno, colno, error) {
+            const errorDiv = document.getElementById('errors');
+            errorDiv.innerHTML += `<p><strong>Error:</strong> ${message}<br>
+                                   <strong>Source:</strong> ${source}<br>
+                                   <strong>Line:</strong> ${lineno}:${colno}</p>`;
+            return true;
+        };
+
+        // Log helper
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            logDiv.innerHTML += `<p>${message}</p>`;
+        }
+
+        // Test import modules one by one
+        async function testImports() {
+            try {
+                log('Testing Three.js import...');
+                const threeModule = await import('./node_modules/three/build/three.module.js');
+                log('✅ Three.js imported successfully');
+                
+                try {
+                    log('Testing OrbitControls import...');
+                    const orbitControlsModule = await import('./node_modules/three/examples/jsm/controls/OrbitControls.js');
+                    log('✅ OrbitControls imported successfully');
+                } catch (err) {
+                    log('❌ OrbitControls import failed: ' + err.message);
+                }
+                
+                try {
+                    log('Testing starship_model.js import...');
+                    const starshipModelModule = await import('./scripts/starship_model.js');
+                    log('✅ starship_model.js imported successfully');
+                } catch (err) {
+                    log('❌ starship_model.js import failed: ' + err.message);
+                }
+                
+                try {
+                    log('Testing physics_engine.js import...');
+                    const physicsEngineModule = await import('./scripts/physics_engine.js');
+                    log('✅ physics_engine.js imported successfully');
+                } catch (err) {
+                    log('❌ physics_engine.js import failed: ' + err.message);
+                }
+                
+                try {
+                    log('Testing main.js import...');
+                    const mainModule = await import('./scripts/main.js');
+                    log('✅ main.js imported successfully');
+                } catch (err) {
+                    log('❌ main.js import failed: ' + err.message);
+                }
+                
+            } catch (err) {
+                log('❌ Three.js import failed: ' + err.message);
+            }
+        }
+
+        // Run tests
+        testImports();
+    </script>
+</body>
+</html>

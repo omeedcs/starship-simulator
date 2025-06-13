@@ -1,0 +1,212 @@
+/* Main CSS styles for the SpaceX Starship Simulator */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Arial', sans-serif;
+}
+
+body {
+    overflow: hidden;
+    background-color: #000;
+    color: #fff;
+}
+
+/* Loading Screen */
+#loading-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: #000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.loading-content {
+    text-align: center;
+    width: 80%;
+    max-width: 500px;
+}
+
+.loading-content h1 {
+    font-size: 2.5rem;
+    margin-bottom: 2rem;
+    color: #fff;
+}
+
+.progress-container {
+    width: 100%;
+    height: 10px;
+    background-color: #333;
+    border-radius: 5px;
+    margin-bottom: 1rem;
+    overflow: hidden;
+}
+
+.progress-bar {
+    height: 100%;
+    width: 0%;
+    background-color: #007bff;
+    transition: width 0.3s ease;
+}
+
+.loading-text {
+    font-size: 1rem;
+    color: #ccc;
+}
+
+/* Simulator Container */
+#simulator-container {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+}
+
+#simulator-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+
+/* UI Overlay */
+#ui-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+}
+
+#telemetry-panel, #control-panel, #info-panel {
+    background-color: rgba(0, 0, 0, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 5px;
+    padding: 15px;
+    margin-bottom: 10px;
+    pointer-events: auto;
+    backdrop-filter: blur(5px);
+}
+
+#telemetry-panel {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 250px;
+}
+
+#control-panel {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    width: 300px;
+}
+
+#info-panel {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    width: 250px;
+}
+
+h3 {
+    margin-bottom: 10px;
+    font-size: 1.2rem;
+    color: #fff;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    padding-bottom: 5px;
+}
+
+.telemetry-item {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+}
+
+.label {
+    color: #ccc;
+}
+
+.value {
+    font-family: 'Courier New', monospace;
+    color: #00ff00;
+}
+
+.control-group {
+    margin-bottom: 15px;
+}
+
+.control-btn, .camera-btn {
+    background-color: #333;
+    color: #fff;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 8px 12px;
+    margin-right: 5px;
+    margin-bottom: 5px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.control-btn:hover, .camera-btn:hover {
+    background-color: #444;
+}
+
+.control-btn:disabled {
+    background-color: #222;
+    color: #666;
+    cursor: not-allowed;
+}
+
+.camera-btn.active {
+    background-color: #007bff;
+    border-color: #0056b3;
+}
+
+#simulation-speed {
+    width: 100%;
+    margin: 10px 0;
+}
+
+#mission-status {
+    font-size: 1.1rem;
+    margin-bottom: 10px;
+    color: #00ff00;
+}
+
+#mission-timer {
+    font-family: 'Courier New', monospace;
+    font-size: 1.2rem;
+    color: #fff;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    #telemetry-panel, #control-panel, #info-panel {
+        width: calc(100% - 40px);
+        position: relative;
+        top: auto;
+        right: auto;
+        left: auto;
+        bottom: auto;
+    }
+    
+    #ui-overlay {
+        justify-content: flex-end;
+    }
+    
+    .control-btn, .camera-btn {
+        padding: 12px;
+        font-size: 1rem;
+    }
+}
